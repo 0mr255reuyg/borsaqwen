@@ -44,16 +44,25 @@ div[data-testid="stButton"] button[data-testid="baseButton-primary"]:hover { bac
 </style>
 """, unsafe_allow_html=True)
 
-# CANLI TARAMA EVRENİ: şu anki gerçek BIST100 üyeliği (membership.py'den).
-BIST100_YF = [t+".IS" for t in get_current_constituents()]
+# CANLI TARAMA EVRENİ
+try:
+    BIST100_YF = [t+".IS" for t in get_current_constituents()]
+except Exception as e:
+    st.error(f"BIST100 listesi alınamadı: {e}")
+    BIST100_YF = []
 
-# BACKTEST EVRENİ: sadece bugünün değil, HİÇ BIST100'de bulunmuş TÜM ticker'lar.
-BIST100_ALL_TIME_YF = [t+".IS" for t in get_all_tickers_ever()]
+# BACKTEST EVRENİ
+try:
+    BIST100_ALL_TIME_YF = [t+".IS" for t in get_all_tickers_ever()]
+except Exception as e:
+    st.error(f"Tüm zamanların listesi alınamadı: {e}")
+    BIST100_ALL_TIME_YF = []
 
-# Her açılışta: canlı kaynakla (borsapy) son kayıtlı membership.py dönemini
-# kıyaslar. Fark varsa (yeni bir çeyreklik revizyon olmuş demektir) uyarı
-# metni döner; otomatik güncelleme YAPMAZ, sadece haber verir.
-REVISION_WARNING = check_for_updates_via_borsapy()
+# REVISION WARNING
+try:
+    REVISION_WARNING = check_for_updates_via_borsapy()
+except:
+    REVISION_WARNING = None
 
 # ── 2. VERİ ÇEKME ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -88,18 +97,18 @@ def fetch_single(ticker, period, interval):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_benchmark(period, interval):
-    df = yf.download("XU100.IS", period=period, interval=interval, auto_adjust=True, progress=False, timeout=5)
-    if df is not None and len(df) > 0:
-        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-        df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-        return df.dropna(subset=['Close'])
+    try:
+        df = yf.download("XU100.IS", period=period, interval=interval, auto_adjust=True, progress=False, timeout=5)
+        if df is not None and len(df) > 0:
+            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+            df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+            return df.dropna(subset=['Close'])
+    except: pass
     return pd.DataFrame()
 
 # ── 2b. TLREF (TCMB EVDS) ─────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_tl_rate_daily():
-    """TCMB'nin gerçek gecelik (O/N) borç verme faizini (yüzde) günlük olarak
-    döndürür. API anahtarı gerekmez."""
     try:
         tcmb = bp.TCMB()
         hist = tcmb.history("overnight")
@@ -118,7 +127,6 @@ def fetch_tl_rate_daily():
         return pd.Series(dtype=float)
 
 def _weekly_ohlc_from_series(s):
-    """Günlük bir oran serisinden haftalık mum (OHLC) üretir."""
     if s is None or s.empty:
         return pd.DataFrame()
     w = s.resample("W-FRI").agg(["first", "max", "min", "last"])
@@ -127,15 +135,15 @@ def _weekly_ohlc_from_series(s):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_macro_rate_fallback():
-    """Gerçek faiz verisine ulaşılamadığında kullanılan yedek proxy (^TNX)."""
-    df = yf.download("^TNX", period="5y", interval="1wk", auto_adjust=True, progress=False)
-    if df is not None and len(df) > 55:
-        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-        return df.dropna(subset=['Close'])
+    try:
+        df = yf.download("^TNX", period="5y", interval="1wk", auto_adjust=True, progress=False)
+        if df is not None and len(df) > 55:
+            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+            return df.dropna(subset=['Close'])
+    except: pass
     return pd.DataFrame()
 
 def get_tlref_weekly():
-    """Haftalık TL faiz OHLC verisini + kaynağını döndürür. Öncelik gerçek TCMB O/N faizinde."""
     daily = fetch_tl_rate_daily()
     weekly = _weekly_ohlc_from_series(daily)
     if len(weekly) >= 55:
@@ -197,57 +205,59 @@ def calc_adx(h, l, c, n=14):
     return adx, plus_di, minus_di
 
 def calc_obv(c, v):
-    """On-Balance Volume hesaplar."""
     direction = np.sign(c.diff())
     obv = (v * direction).cumsum()
     return obv
 
 # ── 4. MAKRO REJİM MOTORU ─────────────────────────────────────────────────────
 def get_macro_regime():
-    df_rate, source = get_tlref_weekly()
-    metrics = {"source": source, "is_plato": False}
-    if df_rate.empty or len(df_rate) < 55:
-        return "Bilinmiyor", [], metrics
+    try:
+        df_rate, source = get_tlref_weekly()
+        metrics = {"source": source, "is_plato": False}
+        if df_rate.empty or len(df_rate) < 55:
+            return "Bilinmiyor", [], metrics
 
-    c = _c(df_rate); h = _h(df_rate); l = _l(df_rate)
-    sma8_s = sma(c, 8); sma54_s = sma(c, 54)
-    sma8 = float(sma8_s.iloc[-1]); sma54 = float(sma54_s.iloc[-1])
-    adx, plus_di, minus_di = calc_adx(h, l, c)
-    adx_val = float(adx.iloc[-1]); p_di = float(plus_di.iloc[-1]); m_di = float(minus_di.iloc[-1])
+        c = _c(df_rate); h = _h(df_rate); l = _l(df_rate)
+        sma8_s = sma(c, 8); sma54_s = sma(c, 54)
+        sma8 = float(sma8_s.iloc[-1]); sma54 = float(sma54_s.iloc[-1])
+        adx, plus_di, minus_di = calc_adx(h, l, c)
+        adx_val = float(adx.iloc[-1]); p_di = float(plus_di.iloc[-1]); m_di = float(minus_di.iloc[-1])
 
-    last_val = float(c.iloc[-1])
-    ret_2m = (last_val / float(c.iloc[-9]) - 1) if len(c) > 9 else np.nan
-    ret_1y = (last_val / float(c.iloc[-53]) - 1) if len(c) > 53 else np.nan
+        last_val = float(c.iloc[-1])
+        ret_2m = (last_val / float(c.iloc[-9]) - 1) if len(c) > 9 else np.nan
+        ret_1y = (last_val / float(c.iloc[-53]) - 1) if len(c) > 53 else np.nan
 
-    spread_pct = abs(sma8 - sma54) / sma54 * 100 if sma54 else 0.0
-    is_plato = spread_pct < 3 and adx_val < 20
+        spread_pct = abs(sma8 - sma54) / sma54 * 100 if sma54 else 0.0
+        is_plato = spread_pct < 3 and adx_val < 20
 
-    metrics.update({
-        "last": last_val, "sma8": sma8, "sma54": sma54,
-        "adx": adx_val, "plus_di": p_di, "minus_di": m_di,
-        "ret_2m": ret_2m, "ret_1y": ret_1y, "is_plato": is_plato,
-    })
+        metrics.update({
+            "last": last_val, "sma8": sma8, "sma54": sma54,
+            "adx": adx_val, "plus_di": p_di, "minus_di": m_di,
+            "ret_2m": ret_2m, "ret_1y": ret_1y, "is_plato": is_plato,
+        })
 
-    if is_plato:
-        regime = "Denge (Plato)"
-        sectors = ["Ulaşım ve Turizm"]
-    elif sma8 > sma54 and p_di > m_di and adx_val >= 20:
-        regime = "Savunmacı (Risk Off — Faiz Yükseliyor)"
-        sectors = ["Gıda ve Perakende", "İletişim", "Sağlık"]
-    elif sma8 < sma54 and m_di > p_di and adx_val >= 20:
-        regime = "Büyüme (Risk On — Faiz Düşüyor)"
-        sectors = ["Banka", "İnşaat ve GMYO", "İnşaat Malzemeleri", "Holding ve Yatırım",
-                   "Otomotiv", "Sanayi ve Kimya", "Teknoloji ve Yazılım", "Enerji",
-                   "Finansal Kiralama ve Faktoring"]
-    else:
-        regime = "Denge (Plato)"
-        sectors = ["Ulaşım ve Turizm"]
+        if is_plato:
+            regime = "Denge (Plato)"
+            sectors = ["Ulaşım ve Turizm"]
+        elif sma8 > sma54 and p_di > m_di and adx_val >= 20:
+            regime = "Savunmacı (Risk Off — Faiz Yükseliyor)"
+            sectors = ["Gıda ve Perakende", "İletişim", "Sağlık"]
+        elif sma8 < sma54 and m_di > p_di and adx_val >= 20:
+            regime = "Büyüme (Risk On — Faiz Düşüyor)"
+            sectors = ["Banka", "GYO", "İnşaat Malzemeleri", "Holding",
+                       "Otomotiv", "Sanayi ve Kimya", "Teknoloji", "Enerji",
+                       "Faktoring ve Finansal Kiralama"]
+        else:
+            regime = "Denge (Plato)"
+            sectors = ["Ulaşım ve Turizm"]
 
-    return regime, sectors, metrics
+        return regime, sectors, metrics
+    except Exception as e:
+        return "Hata", [], {"source": "Hata", "error": str(e)}
 
 CURRENT_REGIME, REGIME_SECTORS, REGIME_METRICS = get_macro_regime()
 
-# ─ 5. STRATEJİLER ────────────────────────────────────────────────────────────
+# ── 5. STRATEJİLER ────────────────────────────────────────────────────────────
 def score_emre(df, bm_df, ticker=None):
     try:
         c = _c(df); v = _v(df)
@@ -416,7 +426,7 @@ def _pick_portfolio(sorted_results, strategy, max_n=5, max_per_sector=2):
         picked = _fill(relaxed, target_min)
     return picked
 
-# ── 6. GRAFİKLER ─────────────────────────────────────────────────────────────
+# ── 6. GRAFİKLER ──────────────────────────────────────────────────────────────
 def build_chart(df, ticker, interval):
     c = _c(df); h = _h(df); l = _l(df); v = _v(df); o = df['Open'].squeeze()
     s20 = sma(c,20); s50 = sma(c,50); ml, sl, hl_s = macd_calc(c)
@@ -468,22 +478,26 @@ def render_detail(result, strategy, interval):
 
     c1, c2 = st.columns(2)
     for i,(k,(passed,val)) in enumerate(result["criteria"].items()):
-        icon="✅" if passed else ""
+        icon="✅" if passed else "❌"
         col="pass" if passed else "fail"
         (c1 if i%2==0 else c2).markdown(f'<div class="mc"><div class="ml">{k}</div><div class="mv {col}">{icon} {val}</div></div>', unsafe_allow_html=True)
 
     st.markdown('<div class="sec-title">📈 Grafik Analizi</div>', unsafe_allow_html=True)
     st.plotly_chart(build_chart(result["df"], result["ticker"], interval), use_container_width=True, config={"displayModeBar":False})
 
-# ── 7. UYGULAMA YÜKLEME VE SESSION STATE ─────────────────────────────────────
+# ── 7. UYGULAMA YÜKLEME VE SESSION STATE ──────────────────────────────────────
 st.markdown('<div class="main-header">BIST Makro Tarayıcı</div>', unsafe_allow_html=True)
 st.markdown(f'<div class="sub-header">{datetime.now().strftime("%d.%m.%Y")} · {len(BIST100_YF)} Hisse</div>', unsafe_allow_html=True)
 if REVISION_WARNING:
     st.warning(f"⚠️ {REVISION_WARNING}")
 
-defaults = {"strategy":"emre", "selected_ticker":None, "scan_done":False, "results":[], "page":"scanner", "bt_done":False, "bt_results":{}}
-for k,v in defaults.items():
-    if k not in st.session_state: st.session_state[k] = v
+if "strategy" not in st.session_state: st.session_state.strategy = "emre"
+if "selected_ticker" not in st.session_state: st.session_state.selected_ticker = None
+if "scan_done" not in st.session_state: st.session_state.scan_done = False
+if "results" not in st.session_state: st.session_state.results = []
+if "page" not in st.session_state: st.session_state.page = "scanner"
+if "bt_done" not in st.session_state: st.session_state.bt_done = False
+if "bt_results" not in st.session_state: st.session_state.bt_results = {}
 
 # ── 8. SOL MENÜ (SIDEBAR) ─────────────────────────────────────────────────────
 with st.sidebar:
@@ -492,105 +506,130 @@ with st.sidebar:
     period = "9mo" if interval == "1d" else "3y"
 
     st.markdown("---")
-    st.markdown("### 🔍 Hisse Ara")
+    st.markdown("###  Hisse Ara")
     search_input = st.text_input("Ticker", placeholder="Örn: GARAN").upper().strip()
     if st.button("Ara", use_container_width=True):
-        st.session_state.page = "search"; st.session_state.search_ticker = search_input; st.rerun()
+        st.session_state.page = "search"
+        st.session_state.search_ticker = search_input
+        st.rerun()
 
     st.markdown("---")
-    st.markdown("###  Makro Menü")
+    st.markdown("### 🌍 Makro Menü")
     if st.button("🏦 TLREF & Faiz Analizi", use_container_width=True):
-        st.session_state.page = "tlref"; st.rerun()
+        st.session_state.page = "tlref"
+        st.rerun()
         
     all_themes = ["— Temalar —"] + list(MACRO_THEMES_PRIMARY.keys()) + ["──────"] + list(MACRO_THEMES_SECONDARY.keys())
     macro_theme = st.selectbox("Tema Seç", all_themes, label_visibility="collapsed")
     if st.button("Temaya Göre Tara", use_container_width=True):
         if macro_theme not in ["— Temalar —","──────"]:
-            st.session_state.page = "macro"; st.session_state.macro_theme = macro_theme; st.rerun()
+            st.session_state.page = "macro"
+            st.session_state.macro_theme = macro_theme
+            st.rerun()
 
     st.markdown("---")
     if st.button("📊 Portföy Backtest", use_container_width=True, type="primary"):
-        st.session_state.page = "perf"; st.rerun()
+        st.session_state.page = "perf"
+        st.rerun()
     if st.button("🏭 Sektör Özeti", use_container_width=True):
-        st.session_state.page = "sektor"; st.rerun()
+        st.session_state.page = "sektor"
+        st.rerun()
 
     st.markdown("---")
     st.markdown("### 🧭 Stratejiler")
     if st.button("🟠 Emre'nin Makro Stratejisi", use_container_width=True):
-        st.session_state.update(strategy="emre", page="scanner", scan_done=False, results=[], selected_ticker=None); st.rerun()
+        st.session_state.strategy = "emre"
+        st.session_state.page = "scanner"
+        st.session_state.scan_done = False
+        st.session_state.results = []
+        st.session_state.selected_ticker = None
+        st.rerun()
     if st.button("🔵 Faiz Pusulası Stratejisi", use_container_width=True):
-        st.session_state.update(strategy="claude", page="scanner", scan_done=False, results=[], selected_ticker=None); st.rerun()
-    if st.button(" Qwen'in Alfa Motoru", use_container_width=True):
-        st.session_state.update(strategy="qwen", page="scanner", scan_done=False, results=[], selected_ticker=None); st.rerun()
+        st.session_state.strategy = "claude"
+        st.session_state.page = "scanner"
+        st.session_state.scan_done = False
+        st.session_state.results = []
+        st.session_state.selected_ticker = None
+        st.rerun()
+    if st.button("🟣 Qwen'in Alfa Motoru", use_container_width=True):
+        st.session_state.strategy = "qwen"
+        st.session_state.page = "scanner"
+        st.session_state.scan_done = False
+        st.session_state.results = []
+        st.session_state.selected_ticker = None
+        st.rerun()
 
-# ─ 9. SAYFALAR ───────────────────────────────────────────────────────────────
+# ── 9. SAYFALAR ──────────────────────────────────────────────────────────────
 
 if st.session_state.page == "tlref":
     st.markdown("## 🏦 TLREF & Makroekonomik Faiz Motoru")
     st.markdown("Haftalık periyotta faiz trendini (SMA 8/54) ve yön şiddetini (ADX, D+/D-) analiz eder.")
     st.markdown("---")
 
-    df_rate, tlref_source = get_tlref_weekly()
+    try:
+        df_rate, tlref_source = get_tlref_weekly()
 
-    if df_rate.empty or len(df_rate) < 55:
-        st.error(" Faiz verisi çekilemedi. TCMB kaynağına şu an ulaşılamıyor olabilir, birazdan tekrar dene.")
-    else:
-        if "Proxy" in tlref_source:
-            st.warning(f"⚠️ TCMB faiz verisine ulaşılamadı, yön fikri için yedek gösterge kullanılıyor: **{tlref_source}**.")
+        if df_rate.empty or len(df_rate) < 55:
+            st.error("❌ Faiz verisi çekilemedi. TCMB kaynağına şu an ulaşılamıyor olabilir, birazdan tekrar dene.")
         else:
-            st.success(f"✅ Veri kaynağı: **{tlref_source}**")
-
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.plotly_chart(build_tlref_chart(df_rate), use_container_width=True, config={"displayModeBar":False})
-        with c2:
-            m = REGIME_METRICS
-            rc = "#10b981" if "On" in CURRENT_REGIME else "#ef4444" if "Off" in CURRENT_REGIME else "#f59e0b"
-            if m.get("is_plato"):
-                plato_badge = " PLATO — YATAY SEYİR"
-            elif m.get("sma8", 0) > m.get("sma54", 0):
-                plato_badge = "🔴 FAİZ YÜKSELİŞTE"
+            if "Proxy" in tlref_source:
+                st.warning(f"⚠️ TCMB faiz verisine ulaşılamadı, yön fikri için yedek gösterge kullanılıyor: **{tlref_source}**.")
             else:
-                plato_badge = "🟢 FAİZ DÜŞÜŞTE"
+                st.success(f"✅ Veri kaynağı: **{tlref_source}**")
 
-            st.markdown(f"""<div style='border:1px solid #333; padding:20px; border-radius:8px; background:#111; text-align:center;'>
-<h4 style='margin:0; color:#888; font-size:0.9rem;'>Motorun Algıladığı Rejim</h4>
-<h2 style='margin:10px 0; color:{rc}; font-size:1.5rem;'>{CURRENT_REGIME}</h2>
-<div class='stag'>{plato_badge}</div>
-<p style='color:#a3a3a3; font-size:0.8rem; margin-top:10px;'>D+ ve D- kesişimleri, ADX trend gücü ve SMA 8/54 periyotları ile hesaplanır.</p>
-</div>""", unsafe_allow_html=True)
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.plotly_chart(build_tlref_chart(df_rate), use_container_width=True, config={"displayModeBar":False})
+            with c2:
+                m = REGIME_METRICS
+                rc = "#10b981" if "On" in CURRENT_REGIME else "#ef4444" if "Off" in CURRENT_REGIME else "#f59e0b"
+                if m.get("is_plato"):
+                    plato_badge = " PLATO — YATAY SEYİR"
+                elif m.get("sma8", 0) > m.get("sma54", 0):
+                    plato_badge = "🔴 FAİZ YÜKSELİŞTE"
+                else:
+                    plato_badge = "🟢 FAİZ DÜŞÜŞTE"
 
-            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-            mc1, mc2 = st.columns(2)
-            mc1.metric("Güncel Faiz", f"%{m.get('last', float('nan')):.2f}" if m.get('last') is not None else "N/A")
-            mc2.metric("ADX (Trend Gücü)", f"{m.get('adx', float('nan')):.1f}" if m.get('adx') is not None else "N/A")
+                st.markdown(f"""<div style='border:1px solid #333; padding:20px; border-radius:8px; background:#111; text-align:center;'>
+    <h4 style='margin:0; color:#888; font-size:0.9rem;'>Motorun Algıladığı Rejim</h4>
+    <h2 style='margin:10px 0; color:{rc}; font-size:1.5rem;'>{CURRENT_REGIME}</h2>
+    <div class='stag'>{plato_badge}</div>
+    <p style='color:#a3a3a3; font-size:0.8rem; margin-top:10px;'>D+ ve D- kesişimleri, ADX trend gücü ve SMA 8/54 periyotları ile hesaplanır.</p>
+    </div>""", unsafe_allow_html=True)
 
-            mc3, mc4 = st.columns(2)
-            r2m = m.get("ret_2m", np.nan); r1y = m.get("ret_1y", np.nan)
-            mc3.metric("2 Aylık Değişim", f"{r2m*100:+.2f}%" if r2m is not None and not np.isnan(r2m) else "N/A")
-            mc4.metric("1 Yıllık Değişim", f"{r1y*100:+.2f}%" if r1y is not None and not np.isnan(r1y) else "N/A")
+                st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+                mc1, mc2 = st.columns(2)
+                mc1.metric("Güncel Faiz", f"%{m.get('last', float('nan')):.2f}" if m.get('last') is not None else "N/A")
+                mc2.metric("ADX (Trend Gücü)", f"{m.get('adx', float('nan')):.1f}" if m.get('adx') is not None else "N/A")
 
-        st.markdown("### 🟢 Mevcut Rejimden Olumlu Etkilenen Hisseler")
-        st.markdown(f"**Desteklenen Sektörler:** {', '.join(REGIME_SECTORS) if REGIME_SECTORS else 'Belirlenemedi'}")
+                mc3, mc4 = st.columns(2)
+                r2m = m.get("ret_2m", np.nan); r1y = m.get("ret_1y", np.nan)
+                mc3.metric("2 Aylık Değişim", f"{r2m*100:+.2f}%" if r2m is not None and not np.isnan(r2m) else "N/A")
+                mc4.metric("1 Yıllık Değişim", f"{r1y*100:+.2f}%" if r1y is not None and not np.isnan(r1y) else "N/A")
 
-        theme_tickers = [t+".IS" for t, s in SECTOR_MAP.items() if s in REGIME_SECTORS]
-        with st.spinner("Hisseler taranıyor..."):
-            bm_df = fetch_benchmark(period, interval)
-            td = fetch_data(theme_tickers, period, interval)
-        
-        rows = []
-        for ticker, df_t in td.items():
-            if df_t is None or len(df_t) < 55: continue
-            sc_e, mx_e, _, _ = score_emre(df_t, bm_df, ticker)
-            c_t = _c(df_t); bm_t = _c(bm_df)
-            rs = rs_score(c_t, bm_t, 20)
-            rows.append({'Hisse': ticker.replace('.IS',''), 'Sektör': get_sector(ticker), 'Emre Skoru': f"{sc_e}/{mx_e}", 'RS (20g)': f"{rs*100:.1f}%" if not np.isnan(rs) else "N/A", '_es': sc_e})
-        
-        if rows:
-            df_rows = pd.DataFrame(rows).sort_values('_es', ascending=False).drop(columns=['_es'])
-            st.dataframe(df_rows, use_container_width=True, height=400)
-        else:
-            st.info("Bu rejime uygun hisse bulunamadı.")
+            st.markdown("### 🟢 Mevcut Rejimden Olumlu Etkilenen Hisseler")
+            st.markdown(f"**Desteklenen Sektörler:** {', '.join(REGIME_SECTORS) if REGIME_SECTORS else 'Belirlenemedi'}")
+
+            theme_tickers = [t+".IS" for t, s in SECTOR_MAP.items() if s in REGIME_SECTORS]
+            with st.spinner("Hisseler taranıyor..."):
+                bm_df = fetch_benchmark(period, interval)
+                td = fetch_data(theme_tickers, period, interval)
+            
+            rows = []
+            for ticker, df_t in td.items():
+                if df_t is None or len(df_t) < 55: continue
+                sc_e, mx_e, _, _ = score_emre(df_t, bm_df, ticker)
+                c_t = _c(df_t); bm_t = _c(bm_df)
+                rs = rs_score(c_t, bm_t, 20)
+                rows.append({'Hisse': ticker.replace('.IS',''), 'Sektör': get_sector(ticker), 'Emre Skoru': f"{sc_e}/{mx_e}", 'RS (20g)': f"{rs*100:.1f}%" if not np.isnan(rs) else "N/A", '_es': sc_e})
+            
+            if rows:
+                df_rows = pd.DataFrame(rows).sort_values('_es', ascending=False).drop(columns=['_es'])
+                st.dataframe(df_rows, use_container_width=True, height=400)
+            else:
+                st.info("Bu rejime uygun hisse bulunamadı.")
+    except Exception as e:
+        st.error(f"TLREF sayfasında hata: {e}")
 
 elif st.session_state.page == "search":
     ticker_q = st.session_state.get("search_ticker","")
@@ -623,25 +662,25 @@ elif st.session_state.page == "search":
             color = "#10b981" if sc==mx else ("#f59e0b" if sc>=mx-1 else "#ef4444")
             st.markdown(f"**Skor:** <span style='color:{color};font-size:1.3rem;font-weight:700'>{sc}/{mx}</span>", unsafe_allow_html=True)
             for k,(passed,val) in crit.items():
-                icon, cc = ("✅", "pass") if passed else ("", "fail")
+                icon, cc = ("✅", "pass") if passed else ("❌", "fail")
                 st.markdown(f'<div class="mc"><div class="ml">{k}</div><div class="mv {cc}">{icon} {val}</div></div>', unsafe_allow_html=True)
     
     st.markdown("---")
     st.plotly_chart(build_chart(df_s, ticker_yf, interval), use_container_width=True, config={"displayModeBar":False})
 
 elif st.session_state.page == "sektor":
-    st.markdown("## 🏭 BİST Sektörel Özet")
+    st.markdown("##  BİST Sektörel Özet")
     st.markdown("---")
     with st.spinner("Sektör verileri hesaplanıyor..."):
         stock_s = fetch_data(BIST100_YF,"3mo","1d")
 
     summary = build_summary(stock_s)
     CAT_STYLE = {
-        " SON KAPANIŞ LİDERİ": ("#064e3b","#10b981"), "⚡ İVME KAZANAN": ("#064e3b","#34d399"),
-        " 1 HAFTA ZİRVE": ("#064e3b","#6ee7b7"), "🏆 1 AY ZİRVE": ("#064e3b","#a7f3d0"),
+        "🚀 SON KAPANIŞ LİDERİ": ("#064e3b","#10b981"), "⚡ İVME KAZANAN": ("#064e3b","#34d399"),
+        "📈 1 HAFTA ZİRVE": ("#064e3b","#6ee7b7"), "🏆 1 AY ZİRVE": ("#064e3b","#a7f3d0"),
         "🔄 TOPARLAYAN": ("#14532d","#86efac"), "📉 SON KAPANIŞTA GERİDE": ("#7f1d1d","#ef4444"),
-        "❄️ 1 HAFTA DİP": ("#7f1d1d","#f87171"), " 1 AY DİP": ("#7f1d1d","#fca5a5"),
-        "🐌 YAVAŞLAYAN": ("#431407","#fb923c"),
+        "❄️ 1 HAFTA DİP": ("#7f1d1d","#f87171"), "🪨 1 AY DİP": ("#7f1d1d","#fca5a5"),
+        " YAVAŞLAYAN": ("#431407","#fb923c"),
     }
 
     def cat_card(title, items, bg, border):
@@ -651,8 +690,8 @@ elif st.session_state.page == "sektor":
             rows+=f'<div style="display:flex;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid #262626;font-size:.85rem;"><span style="color:#ededed">{sect}</span><span style="color:{vc};font-family:JetBrains Mono;font-weight:600">{val}</span></div>'
         return f'<div style="background:{bg};border:1px solid {border};border-radius:8px;padding:1rem;margin-bottom:.8rem"><div style="font-size:.75rem;font-weight:700;color:{border};text-transform:uppercase;letter-spacing:.1em;margin-bottom:.6rem;font-family:JetBrains Mono">{title}</div>{rows}</div>'
 
-    st.markdown("### 📰 Günün Manşetleri")
-    rows_layout = [["🚀 SON KAPANIŞ LİDERİ","⚡ İVME KAZANAN"], [" 1 HAFTA ZİRVE","🏆 1 AY ZİRVE"], ["🔄 TOPARLAYAN","📉 SON KAPANIŞTA GERİDE"], ["❄️ 1 HAFTA DİP","🪨 1 AY DİP"], ["🐌 YAVAŞLAYAN",None]]
+    st.markdown("###  Günün Manşetleri")
+    rows_layout = [["🚀 SON KAPANIŞ LİDERİ","⚡ İVME KAZANAN"], ["📈 1 HAFTA ZİRVE","🏆 1 AY ZİRVE"], ["🔄 TOPARLAYAN","📉 SON KAPANIŞTA GERİDE"], ["️ 1 HAFTA DİP"," 1 AY DİP"], ["🐌 YAVAŞLAYAN",None]]
     for row_cats in rows_layout:
         cols = st.columns(2)
         for col,cat in zip(cols,row_cats):
@@ -665,7 +704,7 @@ elif st.session_state.page == "sektor":
     if bar_chart: st.plotly_chart(bar_chart, use_container_width=True, config={"displayModeBar":False})
     
     st.markdown("---")
-    st.markdown("### 📋 Sektör Detay Tablosu")
+    st.markdown("###  Sektör Detay Tablosu")
     full_df = _sector_returns(stock_s)
     if not full_df.empty:
         full_df = full_df.sort_values('ret_1d',ascending=False).reset_index(drop=True)
@@ -684,7 +723,7 @@ elif st.session_state.page == "macro":
 
     info = get_theme_info(macro_theme)
     theme_sectors = info.get("sektörler",[])
-    st.markdown(f"##  {macro_theme}")
+    st.markdown(f"## 🌍 {macro_theme}")
     st.markdown(f"*{info.get('açıklama','')}*")
 
     one_cikanlar = info.get("öne_çıkan",[])
@@ -753,7 +792,7 @@ elif st.session_state.page == "perf":
         st.info("Simülasyonu başlatmak için 'Backtest Çalıştır' butonuna bas.")
         st.stop()
 
-    st.markdown("### 📌 Bu Ay Aktif Portföyler")
+    st.markdown("###  Bu Ay Aktif Portföyler")
     c1,c2,c3 = st.columns(3)
     for col,sk in zip([c1,c2,c3],["emre","claude","qwen"]):
         with col:
@@ -765,11 +804,11 @@ elif st.session_state.page == "perf":
                 st.markdown(f'<div class="mc"><div style="display:flex;justify-content:space-between"><span style="font-weight:700;color:#fff">{pos["ticker"]}</span><span style="color:{pc};font-family:JetBrains Mono;font-weight:600">{pnl:+.1f}%</span></div><div style="font-size:.75rem;color:#888;margin-top:.2rem">Ort. Maliyet: ₺{pos["buy_price"]:.2f} → Güncel: ₺{pos["current_price"]:.2f}</div></div>', unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("### 📈 Portföy Performansı vs BIST 100")
+    st.markdown("###  Portföy Performansı vs BIST 100")
     perf_map = {sk:(bt_results[sk]["pv"],bt_results[sk]["bm"]) for sk in ["emre","claude","qwen"] if bt_results[sk].get("pv") is not None}
     if perf_map: st.plotly_chart(build_perf_chart(perf_map,100_000), use_container_width=True, config={"displayModeBar":False})
 
-    st.markdown("###  Özet İstatistikler")
+    st.markdown("### 📊 Özet İstatistikler")
     stat_cols = st.columns(3)
     for col, sk in zip(stat_cols, ["emre","claude","qwen"]):
         with col:
@@ -815,8 +854,10 @@ elif st.session_state.page == "scanner":
 
     col1, col2 = st.columns([1, 4])
     with col1:
-        if st.button(" Tüm BIST'i Tara", type="primary"):
-            st.session_state.scan_done = False; st.session_state.results = []; st.session_state.selected_ticker = None
+        if st.button("🔍 Tüm BIST'i Tara", type="primary"):
+            st.session_state.scan_done = False
+            st.session_state.results = []
+            st.session_state.selected_ticker = None
 
     if not st.session_state.scan_done:
         with st.spinner("Piyasa verileri işleniyor..."):
@@ -883,7 +924,7 @@ elif st.session_state.page == "scanner":
             if st.button(f"⭐ {lbl} ({r['score']}/{r['max_score']})\n{r['sector'][:15]}", key=f"t5_{r['ticker']}", use_container_width=True):
                 st.session_state.selected_ticker = r["ticker"]; st.rerun()
 
-        st.markdown(f'<div class="sec-title">⚠️ Diğerleri ({len(near_r)})</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sec-title">️ Diğerleri ({len(near_r)})</div>', unsafe_allow_html=True)
         for r in near_r:
             lbl = r["ticker"].replace(".IS","")
             if st.button(f" {lbl} ({r['score']}/{r['max_score']})\n{r['sector'][:15]}", key=f"nr_{r['ticker']}", use_container_width=True):
