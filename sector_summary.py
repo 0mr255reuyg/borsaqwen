@@ -1,9 +1,5 @@
 """
 Sektörel Özet Modülü - İYİLEŞTİRİLMİŞ
-Sektörlerin getiri, momentum ve toparlanma verilerini hesaplar.
-İYİLEŞTİRMELER:
-1. Ortalama (mean) yerine ortanca (median) kullanımı - tek bir hissenin aşırı hareketi sektörü yanıltmasın
-2. Minimum 3 hisse filtresi - az hisseli niş sektörler tabloyu domine etmesin
 """
 import pandas as pd
 import numpy as np
@@ -55,7 +51,6 @@ def _sector_returns(stock_data):
 
     df_all = pd.DataFrame(rows)
     
-    # İYİLEŞTİRME 1: mean yerine median kullan (outlier'lardan etkilenme)
     sect_df = df_all.groupby('sector').agg(
         ret_1d=('ret_1d','median'),
         ret_5d=('ret_5d','median'),
@@ -65,7 +60,6 @@ def _sector_returns(stock_data):
         hisse_sayisi=('ticker','count'),
     ).reset_index()
 
-    # İYİLEŞTİRME 2: Minimum 3 hisse filtresi - az hisseli sektörler yanıltmasın
     sect_df = sect_df[sect_df['hisse_sayisi'] >= 3]
 
     return sect_df
@@ -96,7 +90,7 @@ def build_summary(stock_data):
     return {
         " SON KAPANIŞ LİDERİ":   [(s, fmt(v)) for s,v in top_1d],
         "⚡ İVME KAZANAN":        [(s, fmt(v)) for s,v in ivme],
-        " 1 HAFTA ZİRVE":       [(s, fmt(v)) for s,v in top_5d],
+        "📈 1 HAFTA ZİRVE":       [(s, fmt(v)) for s,v in top_5d],
         "🏆 1 AY ZİRVE":          [(s, fmt(v)) for s,v in top_21d],
         "🔄 TOPARLAYAN":          [(s, fmt(v)) for s,v in toparlayan] or [("—","")],
         "📉 SON KAPANIŞTA GERİDE": [(s, fmt(v)) for s,v in bot_1d],
