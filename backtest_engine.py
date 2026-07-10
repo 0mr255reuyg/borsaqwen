@@ -332,7 +332,7 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                         pos['shares'] += new_shares
                         pos['avg_cost'] = total_cost / pos['shares']
                         cash -= buy_amt
-                        trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': '🔵 EKLEME', 'Maliyet ₺': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{price:.2f}", 'P&L': "-"})
+                        trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': '🔵 EKLEME', 'Maliyet ₺': f"{pos['avg_cost']:.2f}", 'Fiyat ': f"{price:.2f}", 'P&L': "-"})
                 
                 elif diff < -(target_alloc * 0.05):
                     sell_amt = abs(diff)
@@ -340,7 +340,7 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                     pnl = (price / pos['avg_cost'] - 1) * 100
                     pos['shares'] -= sell_shares
                     cash += sell_amt
-                    trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': '🟠 KÂR AL', 'Maliyet ₺': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{price:.2f}", 'P&L': f"{pnl:+.1f}%"})
+                    trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': ' KÂR AL', 'Maliyet ': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{price:.2f}", 'P&L': f"{pnl:+.1f}%"})
             
             else:
                 buy_amt = min(target_alloc, cash)
@@ -350,7 +350,7 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                     cash -= buy_amt
                     trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': '🟢 YENİ ALIŞ', 'Maliyet ₺': f"{price:.2f}", 'Fiyat ₺': f"{price:.2f}", 'P&L': "-"})
         
-        gc.collect()  # Her rebalans döngüsünde bellek temizliği
+        gc.collect()  # ← BELLEK TEMİZLİĞİ
 
     last_date = bm_idx[-1]
     final_val = cash
@@ -389,7 +389,7 @@ def calc_stats(pv_df, bm_norm, start_capital):
     return {'Toplam Getiri': f"{total:+.1f}%", 'CAGR': f"{cagr:+.1f}%", 'Max Drawdown': f"{max_dd:.1f}%", 'BIST100 Getirisi': f"{bm_ret:+.1f}%" if bm_ret is not None else 'N/A', 'Alpha': f"{alpha:+.1f}%" if alpha is not None else 'N/A', 'Son Değer': f"₺{pv.iloc[-1]:,.0f}"}
 
 STRAT_COLORS = { 'emre': '#f59e0b', 'claude': '#38bdf8', 'qwen': '#a855f7' }
-STRAT_LABELS = { 'emre': "🟠 Emre'nin Makro Stratejisi", 'claude': ' Faiz Pusulası Stratejisi', 'qwen': '🟣 Qwen\'in Alfa Motoru' }
+STRAT_LABELS = { 'emre': " Emre'nin Makro Stratejisi", 'claude': '🔵 Faiz Pusulası Stratejisi', 'qwen': '🟣 Qwen\'in Alfa Motoru' }
 
 def build_perf_chart(results_map, start_capital):
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.68, 0.32], vertical_spacing=0.04)
