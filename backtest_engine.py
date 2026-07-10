@@ -1,12 +1,6 @@
 """
 Backtest Engine — BIST 100 Strateji Tarayıcı
 Kümülatif Eşit Ağırlıklı Rebalans ve İşlem Log Defteri Entegrasyonu
-
-NOKTA-ZAMANLI ÜYELİK (membership.py): Her rebalans tarihinde aday havuzu,
-o TARİHTE fiilen BIST100 üyesi olan hisselerle sınırlanır (survivorship /
-point-in-time bias düzeltmesi). stock_data'nın bunun işe yaraması için
-membership.get_all_tickers_ever() evrenini (sadece bugünün ~100'ünü değil)
-içermesi gerekir — bu app.py'nin veri çekme kısmında sağlanır.
 """
 import pandas as pd
 import numpy as np
@@ -15,7 +9,6 @@ from plotly.subplots import make_subplots
 from sectors import get_sector
 from membership import get_constituents_at
 
-# ── 1. İNDİKATÖRLER VE YARDIMCI FONKSİYONLAR ──────────────────────────────────
 def _sma(s, n):  return s.rolling(n).mean()
 def _ema(s, n):  return s.ewm(span=n, adjust=False).mean()
 
@@ -48,7 +41,6 @@ def _month_starts(index, start, end):
     return list(df_tmp.groupby('ym')['d'].first())
 
 def calc_obv(c, v):
-    """On-Balance Volume hesaplar."""
     direction = np.sign(c.diff())
     obv = (v * direction).cumsum()
     return obv
@@ -78,12 +70,11 @@ def _pick_candidates(candidates, strategy, top_n=5, max_per_sector=2):
         picked = _fill(relaxed, target_min)
     return picked
 
-# ── 1b. TARİHSEL TLREF MAKRO REJİMİ ───────────────────────────────────────────
 _REGIME_SECTOR_MAP = {
     "risk_off": ["Gıda ve Perakende", "İletişim", "Sağlık"],
-    "risk_on":  ["Banka", "İnşaat ve GMYO", "İnşaat Malzemeleri", "Holding ve Yatırım",
-                 "Otomotiv", "Sanayi ve Kimya", "Teknoloji ve Yazılım", "Enerji",
-                 "Finansal Kiralama ve Faktoring"],
+    "risk_on":  ["Banka", "GYO", "İnşaat Malzemeleri", "Holding",
+                 "Otomotiv", "Sanayi ve Kimya", "Teknoloji", "Enerji",
+                 "Faktoring ve Finansal Kiralama"],
     "plato":    ["Ulaşım ve Turizm"],
 }
 
@@ -121,7 +112,6 @@ def _regime_sectors_at(tlref_weekly, date):
         return _REGIME_SECTOR_MAP["risk_on"]
     return _REGIME_SECTOR_MAP["plato"]
 
-# ── 2. KRİTER SKORU (GEÇMİŞ TARİH İÇİN) ───────────────────────────────────────
 def _max_score_for(strategy):
     return {"emre": 5, "claude": 7, "qwen": 5}.get(strategy, 5)
 
@@ -198,7 +188,6 @@ def _score_at(strategy, df, bm_df, date, ticker=None, regime_sectors=None, secto
         elif strategy == "qwen":
             sector = get_sector(ticker) if ticker else "Diğer"
             
-            # KRİTER 1: Sektör Gücü
             sector_rs = sector_strength_map.get(sector, np.nan) if sector_strength_map else np.nan
             top_3_sectors = []
             if sector_strength_map:
@@ -207,7 +196,6 @@ def _score_at(strategy, df, bm_df, date, ticker=None, regime_sectors=None, secto
             
             sector_strong = (not np.isnan(sector_rs)) and (sector_rs > 0) and (sector in top_3_sectors)
             
-            # KRİTER 2: Smart Money Accumulation
             obv = calc_obv(c_s, v_s)
             if len(obv) >= 11:
                 obv_10g_change = (float(obv.iloc[-1]) / float(obv.iloc[-11]) - 1) * 100 if float(obv.iloc[-11]) != 0 else 0
@@ -216,16 +204,13 @@ def _score_at(strategy, df, bm_df, date, ticker=None, regime_sectors=None, secto
             else:
                 smart_money = False
             
-            # KRİTER 3: Hacim Kırılımı
             avg_vol_5 = float(v_s.iloc[-5:].mean()) if len(v_s) >= 5 else np.nan
             avg_vol_20 = float(v_s.iloc[-20:].mean()) if len(v_s) >= 20 else np.nan
             vol_breakout = (not np.isnan(avg_vol_5)) and (not np.isnan(avg_vol_20)) and (avg_vol_20 > 0) and (avg_vol_5 >= 1.5 * avg_vol_20)
             
-            # KRİTER 4: Rölatif Güç (20g)
             rs_20 = _rs_at(c_s, bm, date, days=20)
             rs_strong = (not np.isnan(rs_20)) and (rs_20 > 0.05)
             
-            # KRİTER 5: Makro Uyumu
             is_macro_aligned = sector in regime_sectors if regime_sectors else False
             
             checks = [
@@ -241,7 +226,6 @@ def _score_at(strategy, df, bm_df, date, ticker=None, regime_sectors=None, secto
         pass
     return 0, _max_score_for(strategy)
 
-# ── 3. ANA BACKTEST MOTORU (REBALANS & LOG DEFTERİ) ───────────────────────────
 def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_capital=100_000, top_n=5):
     bm = benchmark_df['Close'].squeeze()
     start_date = pd.Timestamp('2024-06-01')
@@ -259,7 +243,6 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
     monthly_rows = []   
 
     for i, rdate in enumerate(rebal_dates):
-        # 1. Portföyün o anki toplam değerini hesapla
         port_val = cash
         for tkr, pos in holdings.items():
             if tkr in stock_data:
@@ -268,10 +251,8 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                 if len(vd): port_val += pos['shares'] * float(c.loc[vd[-1]])
         pv_log.append({'date': rdate, 'value': port_val})
 
-        # 1b. Bu rebalans tarihindeki TLREF makro rejimi
         regime_sectors = _regime_sectors_at(tlref_weekly, rdate)
 
-        # 1c. Qwen stratejisi için sector_strength_map hesapla
         sector_strength_map = None
         if strategy == "qwen":
             sector_strength_map = {}
@@ -294,10 +275,8 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                 else:
                     sector_strength_map[sect] = np.nan
 
-        # 1d. NOKTA-ZAMANLI FİLTRE
         point_in_time_members = set(get_constituents_at(rdate))
 
-        # 2. Hisse Havuzunu Tara ve Puanla
         candidates = []
         for tkr, df in stock_data.items():
             if tkr.replace(".IS", "") not in point_in_time_members:
@@ -324,7 +303,6 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
             row[f'#{rank}'] = f"{q['ticker'].replace('.IS','')} ({q['score']}/{q['max']})"
         monthly_rows.append(row)
 
-        # 3. SATIŞ ve REBALANS
         for tkr in list(holdings.keys()):
             if tkr not in target_tickers:
                 pos = holdings[tkr]
@@ -333,7 +311,7 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                 sell_p = float(c.loc[vd[-1]]) if len(vd) else pos['avg_cost']
                 pnl = (sell_p / pos['avg_cost'] - 1) * 100
                 cash += pos['shares'] * sell_p
-                trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': '🔴 TAMAMEN SATIŞ', 'Maliyet ': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{sell_p:.2f}", 'P&L': f"{pnl:+.1f}%"})
+                trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': ' TAMAMEN SATIŞ', 'Maliyet ₺': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{sell_p:.2f}", 'P&L': f"{pnl:+.1f}%"})
                 del holdings[tkr]
 
         for q in top5:
@@ -353,7 +331,7 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                         pos['shares'] += new_shares
                         pos['avg_cost'] = total_cost / pos['shares']
                         cash -= buy_amt
-                        trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': ' EKLEME', 'Maliyet ₺': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{price:.2f}", 'P&L': "-"})
+                        trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': '🔵 EKLEME', 'Maliyet ₺': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{price:.2f}", 'P&L': "-"})
                 
                 elif diff < -(target_alloc * 0.05):
                     sell_amt = abs(diff)
@@ -361,7 +339,7 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                     pnl = (price / pos['avg_cost'] - 1) * 100
                     pos['shares'] -= sell_shares
                     cash += sell_amt
-                    trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': ' KÂR AL', 'Maliyet ': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{price:.2f}", 'P&L': f"{pnl:+.1f}%"})
+                    trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': '🟠 KÂR AL', 'Maliyet ₺': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{price:.2f}", 'P&L': f"{pnl:+.1f}%"})
             
             else:
                 buy_amt = min(target_alloc, cash)
@@ -397,7 +375,6 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
 
     return pv_df, bm_norm, trades_df, active_now, monthly_df
 
-# ── 4. İSTATİSTİK VE GRAFİK YARDIMCILARI ──────────────────────────────────────
 def calc_stats(pv_df, bm_norm, start_capital):
     pv = pv_df['value']; total = (pv.iloc[-1] / start_capital - 1) * 100
     n_yrs = max((pv_df.index[-1] - pv_df.index[0]).days / 365, 0.01)
@@ -409,7 +386,7 @@ def calc_stats(pv_df, bm_norm, start_capital):
     return {'Toplam Getiri': f"{total:+.1f}%", 'CAGR': f"{cagr:+.1f}%", 'Max Drawdown': f"{max_dd:.1f}%", 'BIST100 Getirisi': f"{bm_ret:+.1f}%" if bm_ret is not None else 'N/A', 'Alpha': f"{alpha:+.1f}%" if alpha is not None else 'N/A', 'Son Değer': f"₺{pv.iloc[-1]:,.0f}"}
 
 STRAT_COLORS = { 'emre': '#f59e0b', 'claude': '#38bdf8', 'qwen': '#a855f7' }
-STRAT_LABELS = { 'emre': "🟠 Emre'nin Makro Stratejisi", 'claude': '🔵 Faiz Pusulası Stratejisi', 'qwen': ' Qwen\'in Alfa Motoru' }
+STRAT_LABELS = { 'emre': "🟠 Emre'nin Makro Stratejisi", 'claude': '🔵 Faiz Pusulası Stratejisi', 'qwen': '🟣 Qwen\'in Alfa Motoru' }
 
 def build_perf_chart(results_map, start_capital):
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.68, 0.32], vertical_spacing=0.04)
