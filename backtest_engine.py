@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sectors import get_sector
 from membership import get_constituents_at
+import gc
 
 def _sma(s, n):  return s.rolling(n).mean()
 def _ema(s, n):  return s.ewm(span=n, adjust=False).mean()
@@ -311,7 +312,7 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                 sell_p = float(c.loc[vd[-1]]) if len(vd) else pos['avg_cost']
                 pnl = (sell_p / pos['avg_cost'] - 1) * 100
                 cash += pos['shares'] * sell_p
-                trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': ' TAMAMEN SATIŞ', 'Maliyet ₺': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{sell_p:.2f}", 'P&L': f"{pnl:+.1f}%"})
+                trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': '🔴 TAMAMEN SATIŞ', 'Maliyet ₺': f"{pos['avg_cost']:.2f}", 'Fiyat ₺': f"{sell_p:.2f}", 'P&L': f"{pnl:+.1f}%"})
                 del holdings[tkr]
 
         for q in top5:
@@ -348,6 +349,8 @@ def run_backtest(strategy, stock_data, benchmark_df, tlref_weekly=None, start_ca
                     holdings[tkr] = {'shares': shares, 'avg_cost': price, 'buy_date': rdate, 'score': q['score'], 'max': q['max']}
                     cash -= buy_amt
                     trades.append({'Ay': rdate.strftime('%b %Y'), 'Hisse': tkr.replace('.IS',''), 'İşlem': '🟢 YENİ ALIŞ', 'Maliyet ₺': f"{price:.2f}", 'Fiyat ₺': f"{price:.2f}", 'P&L': "-"})
+        
+        gc.collect()  # Her rebalans döngüsünde bellek temizliği
 
     last_date = bm_idx[-1]
     final_val = cash
@@ -386,7 +389,7 @@ def calc_stats(pv_df, bm_norm, start_capital):
     return {'Toplam Getiri': f"{total:+.1f}%", 'CAGR': f"{cagr:+.1f}%", 'Max Drawdown': f"{max_dd:.1f}%", 'BIST100 Getirisi': f"{bm_ret:+.1f}%" if bm_ret is not None else 'N/A', 'Alpha': f"{alpha:+.1f}%" if alpha is not None else 'N/A', 'Son Değer': f"₺{pv.iloc[-1]:,.0f}"}
 
 STRAT_COLORS = { 'emre': '#f59e0b', 'claude': '#38bdf8', 'qwen': '#a855f7' }
-STRAT_LABELS = { 'emre': "🟠 Emre'nin Makro Stratejisi", 'claude': '🔵 Faiz Pusulası Stratejisi', 'qwen': '🟣 Qwen\'in Alfa Motoru' }
+STRAT_LABELS = { 'emre': "🟠 Emre'nin Makro Stratejisi", 'claude': ' Faiz Pusulası Stratejisi', 'qwen': '🟣 Qwen\'in Alfa Motoru' }
 
 def build_perf_chart(results_map, start_capital):
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.68, 0.32], vertical_spacing=0.04)
